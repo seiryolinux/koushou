@@ -1,8 +1,8 @@
 // src/main.rs
 
 use std::path::PathBuf;
-use thiserror::Error;
 use clap::Parser;
+use thiserror::Error;
 
 mod package;
 mod pkgdb;
@@ -11,9 +11,10 @@ mod removal;
 mod pkgutil;
 mod list;
 mod sync;
+mod resolve;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "koushou — Seiryo Linux package manager", long_about = None)]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -31,8 +32,8 @@ enum Command {
 
 #[derive(clap::Args, Debug)]
 struct InstallArgs {
-    #[arg(help = "Path to .kpkg file")]
-    kpkg_path: PathBuf,
+    #[arg(help = "Package name or path to .kpkg file")]
+    target: String,
     #[arg(long, short = 'r', default_value = "/", help = "Target root directory")]
     root: PathBuf,
 }
@@ -79,6 +80,8 @@ pub enum KspkgError {
     List(#[from] list::ListError),
     #[error("Sync error: {0}")]
     Sync(#[from] sync::SyncError),
+    #[error("Resolve error: {0}")]
+    Resolve(#[from] resolve::ResolveError),
     #[error("Package utility error: {0}")]
     PkgUtil(#[from] pkgutil::PkgUtilError),
 }
@@ -89,7 +92,13 @@ async fn main() -> Result<(), KspkgError> {
 
     match args.command {
         Command::Install(install_args) => {
-            install::install_package(&install_args.kpkg_path, &install_args.root)?;
+            let path = std::path::Path::new(&install_args.target);
+            if path.exists() && path.extension().map_or(false, |ext| ext == "kpkg") {
+                install::install_local_package(path, &install_args.root)?;
+            } else {
+                // Assume it's a package name (e.g. "hello")
+                install::install_package_by_name(&install_args.target, &install_args.root).await?;
+            }
         }
         Command::Remove(remove_args) => {
             removal::remove_package(&remove_args.root, &remove_args.package_name)?;

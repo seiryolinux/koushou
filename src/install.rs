@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use crate::package;
 use crate::pkgdb;
+use crate::resolve;
 
 #[derive(Error, Debug)]
 pub enum InstallError {
@@ -26,9 +27,32 @@ pub enum InstallError {
     InvalidRoot(PathBuf),
     #[error("Package database error: {0}")]
     PkgDb(#[from] pkgdb::PkgDbError),
+    #[error("Resolve error: {0}")]
+    Resolve(#[from] resolve::ResolveError),
 }
 
-pub fn install_package(kpkg_path: &Path, root: &Path) -> Result<(), InstallError> {
+pub async fn install_package_by_name(name: &str, root: &Path) -> Result<(), InstallError> {
+    let flavour_path = root.join("etc/koushou/flavour");
+    if !flavour_path.exists() {
+        return Err(InstallError::InvalidRoot(root.to_path_buf()));
+    }
+    let flavour = std::fs::read_to_string(&flavour_path)?
+        .trim()
+        .to_string();
+
+    let arch = match std::env::consts::ARCH {
+        "x86_64" | "aarch64" => std::env::consts::ARCH,
+        _ => "x86_64",
+    };
+
+    let cache_dir = root.join("var/cache/koushou/pkgs");
+    std::fs::create_dir_all(&cache_dir)?;
+
+    let kpkg_path = resolve::resolve_and_download(name, &flavour, arch, root, &cache_dir).await?;
+    install_local_package(&kpkg_path, root)
+}
+
+pub fn install_local_package(kpkg_path: &Path, root: &Path) -> Result<(), InstallError> {
     if !root.is_dir() {
         return Err(InstallError::InvalidRoot(root.to_path_buf()));
     }
