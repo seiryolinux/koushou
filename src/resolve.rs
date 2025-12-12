@@ -25,6 +25,8 @@ pub enum ResolveError {
     },
     #[error("Dependency resolution error: {0}")]
     Depres(#[from] depres::DepresError),
+    #[error("{0}")]
+    Other(String),
 }
 
 #[derive(Debug, Clone)]
