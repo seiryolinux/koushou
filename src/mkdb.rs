@@ -23,6 +23,7 @@ struct Args {
 struct RepoPackage {
     version: String,
     arch: String,
+    flavour: String,
     filename: String,
     sha256: String,
     depends: Vec<String>,
@@ -119,8 +120,7 @@ fn process_kpkg(path: &Path, db: &mut RepoDatabase) -> Result<(), Box<dyn std::e
 
     let version = get_prop("version")?;
     let arch = get_prop("arch")?;
-
-    // Parse depends
+    let flavour = get_prop("flavour")?;
     let mut depends = Vec::new();
     for child_doc in pkg_node.children() {
         let nodes = child_doc.nodes();

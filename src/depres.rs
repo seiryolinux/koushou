@@ -29,7 +29,7 @@ pub struct PackageId {
     pub name: String,
     pub version: String,
     pub arch: String,
-    pub flavor: String,
+    pub flavour: String,
 }
 
 impl PackageId {
@@ -67,6 +67,7 @@ pub struct Dependency {
 pub struct PackageMetadata {
     pub id: PackageId,
     pub url: String,
+    pub flavour: String,
     pub sha256: String,
     pub depends: Vec<Dependency>,
 }
@@ -94,13 +95,13 @@ impl PackageUniverse {
                     name: name.clone(),
                     version: pkg.version.clone(),
                     arch: pkg.arch.clone(),
-                    flavor: pkg.flavor.clone(),
+                    flavour: pkg.flavour.clone(),
                 };
 
-                let key = (name, pkg.arch.clone(), pkg.flavor.clone());
+                let key = (name, pkg.arch.clone(), pkg.flavour.clone());
                 let url = format!(
                     "https://seiryolinux.github.io/repo/{}/{}/{}/{}",
-                    pkg.flavor, repo, pkg.arch, pkg.filename
+                    pkg.flavour, repo, pkg.arch, pkg.filename
                 );
 
                 let mut depends = Vec::new();
@@ -117,6 +118,7 @@ impl PackageUniverse {
                 packages.entry(key).or_default().push(PackageMetadata {
                     id,
                     url,
+                    flavour,
                     sha256: pkg.sha256,
                     depends,
                 });
@@ -129,14 +131,14 @@ impl PackageUniverse {
     pub fn resolve(
         &self,
         root_packages: &[String],
-        system_flavor: &str,
+        system_flavour: &str,
         arch: &str,
     ) -> Result<ResolutionSolution, DepresError> {
         let mut selected: HashMap<String, PackageMetadata> = HashMap::new();
         let mut visited: HashSet<String> = HashSet::new();
 
         for pkg_name in root_packages {
-            self.resolve_package(pkg_name, system_flavor, arch, &mut selected, &mut visited)?;
+            self.resolve_package(pkg_name, system_flavour, arch, &mut selected, &mut visited)?;
         }
 
         let mut packages = Vec::new();
@@ -159,7 +161,7 @@ impl PackageUniverse {
     fn resolve_package(
         &self,
         name: &str,
-        flavor: &str,
+        flavour: &str,
         arch: &str,
         selected: &mut HashMap<String, PackageMetadata>,
         visited: &mut HashSet<String>,
@@ -169,7 +171,7 @@ impl PackageUniverse {
         }
         visited.insert(name.to_string());
 
-        let key = (name.to_string(), arch.to_string(), flavor.to_string());
+        let key = (name.to_string(), arch.to_string(), flavour.to_string());
         let candidates = self.packages.get(&key)
             .ok_or_else(|| DepresError::PackageNotFound(name.to_string()))?;
 
@@ -177,10 +179,10 @@ impl PackageUniverse {
             .max_by_key(|m| &m.id.version)
             .unwrap();
 
-        if best.id.flavor != flavor {
+        if best.id.flavour != flavour {
             return Err(DepresError::FlavorMismatch {
-                required: best.id.flavor.clone(),
-                system: flavor.to_string(),
+                required: best.id.flavour.clone(),
+                system: flavour.to_string(),
             });
         }
 
@@ -188,7 +190,7 @@ impl PackageUniverse {
 
         for dep in &best.depends {
             if !selected.contains_key(&dep.name) {
-                self.resolve_package(&dep.name, flavor, arch, selected, visited)?;
+                self.resolve_package(&dep.name, flavour, arch, selected, visited)?;
             }
             // TODO: Validate version constraint
         }
@@ -223,7 +225,7 @@ fn parse_dependency(s: &str) -> Option<(String, VersionPredicate)> {
 struct RepoPackage {
     version: String,
     arch: String,
-    flavor: String,
+    flavour: String,
     filename: String,
     sha256: String,
     depends: Vec<String>,
@@ -235,7 +237,6 @@ struct RepoDatabase {
     packages: HashMap<String, RepoPackage>,
 }
 
-/// Final solution
 #[derive(Debug)]
 pub struct ResolutionSolution {
     pub packages: Vec<PackageId>,
