@@ -38,8 +38,13 @@ pub async fn install_package_by_name(name: &str, root: &Path) -> Result<(), Inst
 
     let flavour_path = root.join("etc/koushou/flavour");
     if !flavour_path.exists() {
-        return Err(InstallError::InvalidRoot(root.to_path_buf()));
+        return Err(InstallError::Resolve(
+            resolve::ResolveError::Other(
+                format!("Flavour file not found: {}", flavour_path.display())
+            )
+        ));
     }
+
     let flavour = std::fs::read_to_string(&flavour_path)?
         .trim()
         .to_string();
@@ -81,9 +86,6 @@ pub async fn install_package_by_name(name: &str, root: &Path) -> Result<(), Inst
 }
 
 pub fn install_local_package(kpkg_path: &Path, root: &Path) -> Result<(), InstallError> {
-    eprintln!("🔍 Checking root: {:?}", root);
-    eprintln!("   exists? {:?}", root.exists());
-    eprintln!("   is_dir? {:?}", root.is_dir());
     if !root.is_dir() {
         return Err(InstallError::InvalidRoot(root.to_path_buf()));
     }
@@ -144,7 +146,7 @@ pub fn install_local_package(kpkg_path: &Path, root: &Path) -> Result<(), Instal
         name: pkg.name.clone(),
         version: pkg.version.clone(),
         arch: pkg.arch.clone(),
-        flavor: pkg.flavor.clone(),
+        flavor: pkg.flavor.clone(), 
         depends: pkg.depends.clone(),
         files,
     };
