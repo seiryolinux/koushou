@@ -24,7 +24,7 @@ enum Command {
     Install(InstallArgs),
     Remove(RemoveArgs),
     List(ListArgs),
-    Sync,
+    Sync(SyncArgs),
     Genpkg(GenpkgArgs),
     Buildpkg(BuildpkgArgs),
 }
@@ -47,6 +47,12 @@ struct RemoveArgs {
 
 #[derive(clap::Args, Debug)]
 struct ListArgs {
+    #[arg(long, short = 'r', default_value = "/", help = "Target root directory")]
+    root: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct SyncArgs {
     #[arg(long, short = 'r', default_value = "/", help = "Target root directory")]
     root: PathBuf,
 }
@@ -91,8 +97,8 @@ async fn main() -> Result<(), KspkgError> {
         Command::List(list_args) => {
             list::list_packages(&list_args.root)?;
         }
-        Command::Sync => {
-            sync::sync_repos().await?;
+        Command::Sync(sync_args) => {
+            sync::sync_repos(&sync_args.root).await?;
         }
         Command::Genpkg(genpkg_args) => {
             pkgutil::generate(&genpkg_args.name)?;

@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use zstd::stream::read::Decoder as ZstdDecoder; // ← from zstd, not flate2
+use zstd::stream::read::Decoder as ZstdDecoder;
 use std::io::Read;
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
@@ -13,12 +13,14 @@ pub enum SyncError {
     Http(#[from] reqwest::Error),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("Failed to read flavour from /etc/koushou/flavour")]
+    #[error("TOML parse error: {0}")]
+    Toml(#[from] toml::de::Error),
+    #[error("Failed to read flavour from {{root}}/etc/koushou/flavour")]
     MissingFlavour,
     #[error("Unsupported architecture: {0}")]
     UnsupportedArch(String),
+    #[error("Other: {0}")]
+    Other(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +34,7 @@ pub struct RepoPackage {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RepoDatabase {
+    #[serde(flatten)]
     pub packages: std::collections::HashMap<String, RepoPackage>,
 }
 
@@ -43,8 +46,8 @@ fn detect_arch() -> Result<String, SyncError> {
     }
 }
 
-fn read_flavour() -> Result<String, SyncError> {
-    let flavour_path = Path::new("/etc/koushou/flavour");
+fn read_flavour(root: &Path) -> Result<String, SyncError> {
+    let flavour_path = root.join("etc/koushou/flavour");
     if !flavour_path.exists() {
         return Err(SyncError::MissingFlavour);
     }
@@ -52,15 +55,15 @@ fn read_flavour() -> Result<String, SyncError> {
     Ok(content.trim().to_string())
 }
 
-pub async fn sync_repos() -> Result<(), SyncError> {
+pub async fn sync_repos(root: &Path) -> Result<(), SyncError> {
     println!("📡 Syncing repositories...");
 
-    let flavour = read_flavour()?;
+    let flavour = read_flavour(root)?;
     let arch = detect_arch()?;
-    let cache_dir = PathBuf::from("/var/cache/koushou/repos");
-    let repo_base = "https://fuukami.github.io/repo";
-
+    let cache_dir = root.join("var/cache/koushou/repos");
     fs::create_dir_all(&cache_dir)?;
+
+    let repo_base = "https://seiryolinux.github.io/repo";
 
     sync_repo(repo_base, &flavour, "core", &arch, &cache_dir).await?;
     sync_repo(repo_base, &flavour, "main", &arch, &cache_dir).await?;
@@ -76,7 +79,10 @@ async fn sync_repo(
     arch: &str,
     cache_dir: &Path,
 ) -> Result<(), SyncError> {
-    let url = format!("{}/{}/{}/{}/{reponame}.db.zst", repo_base, flavour, repo_name, arch, reponame = repo_name);
+    let url = format!(
+        "{}/{}/{}/{}/{}.db.zst",
+        repo_base, flavour, repo_name, arch, repo_name
+    );
     let cache_path = cache_dir.join(format!("{}.db.zst", repo_name));
 
     println!("  → Fetching {}", url);
@@ -90,16 +96,14 @@ async fn sync_repo(
     let bytes = response.bytes().await?;
     fs::write(&cache_path, &bytes)?;
 
-    // Decompress with zstd
     let mut decoder = ZstdDecoder::new(&bytes[..])?;
     let mut db_content = String::new();
     decoder.read_to_string(&mut db_content)?;
 
-    // Validate JSON
-    let _db: RepoDatabase = serde_json::from_str(&db_content)?;
+    let _db: RepoDatabase = toml::from_str(&db_content)
+        .map_err(|e| SyncError::Other(format!("Invalid repo DB {}: {}", repo_name, e)))?;
 
-    // Save uncompressed version
-    fs::write(cache_dir.join(format!("{}.db", repo_name)), db_content)?; // ✅ fixed typo
+    fs::write(cache_dir.join(format!("{}.db", repo_name)), db_content)?;
 
     println!("    ✓ {} synced", repo_name);
     Ok(())
