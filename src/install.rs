@@ -32,6 +32,10 @@ pub enum InstallError {
 }
 
 pub async fn install_package_by_name(name: &str, root: &Path) -> Result<(), InstallError> {
+    if !root.is_dir() {
+        return Err(InstallError::InvalidRoot(root.to_path_buf()));
+    }
+
     let flavour_path = root.join("etc/koushou/flavour");
     if !flavour_path.exists() {
         return Err(InstallError::InvalidRoot(root.to_path_buf()));
@@ -48,11 +52,38 @@ pub async fn install_package_by_name(name: &str, root: &Path) -> Result<(), Inst
     let cache_dir = root.join("var/cache/koushou/pkgs");
     std::fs::create_dir_all(&cache_dir)?;
 
-    let kpkg_path = resolve::resolve_and_download(name, &flavour, arch, root, &cache_dir).await?;
-    install_local_package(&kpkg_path, root)
+    let resolved_pkgs = resolve::resolve_transaction(
+        vec![name],
+        &flavour,
+        arch,
+        root,
+    ).await?;
+
+    for pkg in resolved_pkgs {
+        let kpkg_path = cache_dir.join(&pkg.filename);
+
+        if !kpkg_path.exists() {
+            resolve::download_package(&pkg.url, &kpkg_path).await?;
+            let actual_sha = resolve::compute_sha256(&kpkg_path)?;
+            if actual_sha != pkg.sha256 {
+                return Err(InstallError::Resolve(resolve::ResolveError::Sha256Mismatch {
+                    filename: pkg.filename,
+                    expected: pkg.sha256,
+                    actual: actual_sha,
+                }));
+            }
+        }
+
+        install_local_package(&kpkg_path, root)?;
+    }
+
+    Ok(())
 }
 
 pub fn install_local_package(kpkg_path: &Path, root: &Path) -> Result<(), InstallError> {
+    eprintln!("🔍 Checking root: {:?}", root);
+    eprintln!("   exists? {:?}", root.exists());
+    eprintln!("   is_dir? {:?}", root.is_dir());
     if !root.is_dir() {
         return Err(InstallError::InvalidRoot(root.to_path_buf()));
     }

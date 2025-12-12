@@ -12,6 +12,7 @@ mod pkgutil;
 mod list;
 mod sync;
 mod resolve;
+mod depres; 
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "koushou — Seiryo Linux package manager", long_about = None)]
@@ -96,7 +97,6 @@ async fn main() -> Result<(), KspkgError> {
             if path.exists() && path.extension().map_or(false, |ext| ext == "kpkg") {
                 install::install_local_package(path, &install_args.root)?;
             } else {
-                // Assume it's a package name (e.g. "hello")
                 install::install_package_by_name(&install_args.target, &install_args.root).await?;
             }
         }

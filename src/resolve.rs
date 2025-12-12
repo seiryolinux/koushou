@@ -4,12 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::io::Write;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
 use indicatif::{ProgressBar, ProgressStyle};
+use crate::depres;
 
 #[derive(Error, Debug)]
 pub enum ResolveError {
-    #[error("Package '{0}' not found in any repository")]
+    #[error("Package '{0}' not found")]
     NotFound(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -23,21 +23,8 @@ pub enum ResolveError {
         expected: String,
         actual: String,
     },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RepoPackage {
-    version: String,
-    arch: String,
-    filename: String,
-    sha256: String,
-    depends: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RepoDatabase {
-    #[serde(flatten)]
-    packages: std::collections::HashMap<String, RepoPackage>,
+    #[error("Dependency resolution error: {0}")]
+    Depres(#[from] depres::DepresError),
 }
 
 #[derive(Debug, Clone)]
@@ -51,73 +38,35 @@ pub struct ResolvedPackage {
     pub depends: Vec<String>,
 }
 
-pub async fn resolve_and_download(
-    name: &str,
+pub async fn resolve_transaction(
+    package_names: Vec<&str>,
     flavour: &str,
     arch: &str,
     root: &Path,
-    cache_dir: &Path,
-) -> Result<PathBuf, ResolveError> {
-    let resolved = resolve_package(name, flavour, arch, root)?;
+) -> Result<Vec<ResolvedPackage>, ResolveError> {
+    let universe = depres::PackageUniverse::load_from_cache(root)?;
+    let root_pkgs: Vec<String> = package_names.into_iter().map(|s| s.to_string()).collect();
 
-    let output_path = cache_dir.join(&resolved.filename);
-    if output_path.exists() {
-        // TODO: verify existing file SHA256
-    }
+    let solution = universe.resolve(&root_pkgs, flavour, arch)?;
 
-    println!("📥 Fetching {}...", resolved.filename);
-    download_with_progress(&resolved.url, &output_path).await?;
-
-    let actual_sha = compute_sha256(&output_path)?;
-    if actual_sha != resolved.sha256 {
-        return Err(ResolveError::Sha256Mismatch {
-            filename: resolved.filename,
-            expected: resolved.sha256,
-            actual: actual_sha,
+    let mut resolved = Vec::new();
+    for pkg in solution.packages {
+        let filename = format!("{}-{}-{}.kpkg", pkg.name, pkg.version, pkg.arch);
+        resolved.push(ResolvedPackage {
+            name: pkg.name.clone(),
+            version: pkg.version,
+            arch: pkg.arch,
+            filename,
+            url: solution.download_urls[&pkg.name].clone(),
+            sha256: solution.sha256_sums[&pkg.name].clone(),
+            depends: Vec::new(), // not needed post-resolve
         });
     }
 
-    Ok(output_path)
+    Ok(resolved)
 }
 
-fn resolve_package(
-    name: &str,
-    flavour: &str,
-    arch: &str,
-    root: &Path,
-) -> Result<ResolvedPackage, ResolveError> {
-    for repo in ["core", "main", "extra"] {
-        let db_path = root.join(format!("var/cache/koushou/repos/{}.db", repo));
-        if !db_path.exists() {
-            continue;
-        }
-
-        let content = fs::read_to_string(&db_path)?;
-        let db: RepoDatabase = toml::from_str(&content)?;
-
-        if let Some(pkg) = db.packages.get(name) {
-            if pkg.arch == arch {
-                let url = format!(
-                    "https://seiryolinux.github.io/repo/{}/{}/{}/{}",
-                    flavour, repo, arch, pkg.filename
-                );
-                return Ok(ResolvedPackage {
-                    name: name.to_string(),
-                    version: pkg.version.clone(),
-                    arch: pkg.arch.clone(),
-                    filename: pkg.filename.clone(),
-                    url,
-                    sha256: pkg.sha256.clone(),
-                    depends: pkg.depends.clone(),
-                });
-            }
-        }
-    }
-
-    Err(ResolveError::NotFound(name.to_string()))
-}
-
-async fn download_with_progress(url: &str, output_path: &Path) -> Result<(), ResolveError> {
+pub async fn download_package(url: &str, output_path: &Path) -> Result<(), ResolveError> {
     let response = reqwest::get(url).await?;
     let total_size = response.content_length().unwrap_or(0);
 
@@ -145,7 +94,7 @@ async fn download_with_progress(url: &str, output_path: &Path) -> Result<(), Res
     Ok(())
 }
 
-fn compute_sha256(path: &Path) -> Result<String, std::io::Error> {
+pub fn compute_sha256(path: &Path) -> Result<String, std::io::Error> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     let mut file = fs::File::open(path)?;

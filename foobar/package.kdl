@@ -1,0 +1,5 @@
+package "foobar" version="0.1" arch="x86_64" flavor="glibc-systemd" {
+  depends "glibc"
+  depends "htop"
+  license "MIT"
+}
