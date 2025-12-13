@@ -21,6 +21,7 @@ sha2 = "0.10.9"
 indicatif = "0.18.3"
 futures-util = "0.3.31"
 regex = "1.12.2"
+rusqlite = "0.37.0"
 
 [[bin]]
 name = "ksmkdb"

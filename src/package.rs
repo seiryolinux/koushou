@@ -8,7 +8,7 @@ pub struct Package {
     pub name: String,
     pub version: String,
     pub arch: String,
-    pub flavor: String,
+    pub flavour: String,
     pub depends: Vec<String>,
     pub homepage: Option<String>,
     pub license: Option<String>,
@@ -59,10 +59,10 @@ impl Package {
                 .get("arch")
                 .ok_or(PackageParseError::MissingProperty("arch".to_string()))?,
         )?;
-        let flavor = kdl_value_to_string(
+        let flavour = kdl_value_to_string(
             pkg_node
-                .get("flavor")
-                .ok_or(PackageParseError::MissingProperty("flavor".to_string()))?,
+                .get("flavour")
+                .ok_or(PackageParseError::MissingProperty("flavour".to_string()))?,
         )?;
 
         let mut depends = Vec::new();
@@ -98,7 +98,7 @@ impl Package {
             name,
             version,
             arch,
-            flavor,
+            flavour,
             depends,
             homepage,
             license,

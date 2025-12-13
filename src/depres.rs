@@ -5,6 +5,7 @@ use std::path::Path;
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
 use regex::Regex;
+use rusqlite::{Connection, params};
 
 #[derive(Error, Debug)]
 pub enum DepresError {
@@ -12,16 +13,16 @@ pub enum DepresError {
     PackageNotFound(String),
     #[error("No solution found: {0}")]
     NoSolution(String),
-    #[error("Flavor mismatch: package requires '{required}', system is '{system}'")]
-    FlavorMismatch { required: String, system: String },
+    #[error("Flavour mismatch: package requires '{required}', system is '{system}'")]
+    FlavourMismatch { required: String, system: String },
     #[error("Circular dependency detected involving: {0}")]
     CircularDependency(String),
     #[error("Version constraint not satisfied: {0}")]
     VersionConstraint(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("TOML parse error: {0}")]
-    Toml(#[from] toml::de::Error),
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -67,7 +68,6 @@ pub struct Dependency {
 pub struct PackageMetadata {
     pub id: PackageId,
     pub url: String,
-    pub flavour: String,
     pub sha256: String,
     pub depends: Vec<Dependency>,
 }
@@ -79,49 +79,86 @@ pub struct PackageUniverse {
 
 impl PackageUniverse {
     pub fn load_from_cache(root: &Path) -> Result<Self, DepresError> {
+        let db_path = root.join("var/cache/koushou/repos/core.db");
+        let conn = Connection::open(&db_path)?;
+
         let mut packages: HashMap<(String, String, String), Vec<PackageMetadata>> = HashMap::new();
 
-        for repo in ["core", "main", "extra"] {
-            let db_path = root.join(format!("var/cache/koushou/repos/{}.db", repo));
-            if !db_path.exists() {
-                continue;
-            }
+        let mut stmt = conn.prepare(
+            "SELECT name, version, arch, flavour, filename, sha256 FROM packages"
+        )?;
+        let pkg_iter = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
 
-            let content = std::fs::read_to_string(&db_path)?;
-            let db: RepoDatabase = toml::from_str(&content)?;
+        for pkg in pkg_iter {
+            let (name, version, arch, flavour, filename, sha256) = pkg?;
+            let id = PackageId {
+                name: name.clone(),
+                version: version.clone(),
+                arch: arch.clone(),
+                flavour: flavour.clone(),
+            };
+            let url = format!(
+                "https://seiryolinux.github.io/repo/{}/{}/{}/{}",
+                flavour, "core", arch, filename
+            );
+            packages.entry((name, arch, flavour)).or_default().push(PackageMetadata {
+                id,
+                url,
+                sha256,
+                depends: Vec::new(),
+            });
+        }
 
-            for (name, pkg) in db.packages {
-                let id = PackageId {
-                    name: name.clone(),
-                    version: pkg.version.clone(),
-                    arch: pkg.arch.clone(),
-                    flavour: pkg.flavour.clone(),
-                };
+        let mut dep_stmt = conn.prepare(
+            "SELECT package_name, dep_name, dep_predicate FROM dependencies"
+        )?;
+        let dep_iter = dep_stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?, // package_name
+                row.get(1)?, // dep_name
+                row.get(2)?, // dep_predicate (TEXT, may be NULL)
+            ))
+        })?;
 
-                let key = (name, pkg.arch.clone(), pkg.flavour.clone());
-                let url = format!(
-                    "https://seiryolinux.github.io/repo/{}/{}/{}/{}",
-                    pkg.flavour, repo, pkg.arch, pkg.filename
-                );
+        let mut dep_map: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+        for dep in dep_iter {
+            let (pkg_name, dep_name, predicate) = dep?;
+            dep_map.entry(pkg_name).or_default().push((dep_name, predicate));
+        }
 
-                let mut depends = Vec::new();
-                for dep_str in &pkg.depends {
-                    // Parse "glibc>=2.38" or "bash"
-                    if let Some((dep_name, constraint)) = parse_dependency(dep_str) {
-                        depends.push(Dependency {
-                            name: dep_name,
-                            predicate: constraint,
+        for pkg_list in packages.values_mut() {
+            for pkg in pkg_list {
+                if let Some(deps) = dep_map.get(&pkg.id.name) {
+                    for (dep_name, predicate_str) in deps {
+                        let predicate = match predicate_str.as_deref() {
+                            Some(p) if p.starts_with(">=") => {
+                                VersionPredicate::GreaterOrEqual(p[2..].to_string())
+                            }
+                            Some(p) if p.starts_with("<") => {
+                                VersionPredicate::LessThan(p[1..].to_string())
+                            }
+                            Some(p) if p.starts_with("=") => {
+                                VersionPredicate::Exact(p[1..].to_string())
+                            }
+                            Some(p) => VersionPredicate::Exact(p.to_string()),
+                            None => VersionPredicate::Any,
+                            _ => VersionPredicate::Any,
+                        };
+                        pkg.depends.push(Dependency {
+                            name: dep_name.clone(),
+                            predicate,
                         });
                     }
                 }
-
-                packages.entry(key).or_default().push(PackageMetadata {
-                    id,
-                    url,
-                    flavour,
-                    sha256: pkg.sha256,
-                    depends,
-                });
             }
         }
 
@@ -180,7 +217,7 @@ impl PackageUniverse {
             .unwrap();
 
         if best.id.flavour != flavour {
-            return Err(DepresError::FlavorMismatch {
+            return Err(DepresError::FlavourMismatch {
                 required: best.id.flavour.clone(),
                 system: flavour.to_string(),
             });
@@ -192,7 +229,6 @@ impl PackageUniverse {
             if !selected.contains_key(&dep.name) {
                 self.resolve_package(&dep.name, flavour, arch, selected, visited)?;
             }
-            // TODO: Validate version constraint
         }
 
         visited.remove(name);
@@ -200,41 +236,20 @@ impl PackageUniverse {
     }
 }
 
-fn parse_dependency(s: &str) -> Option<(String, VersionPredicate)> {
+fn parse_dependency(s: &str) -> Option<(String, Option<String>)> {
     let re = Regex::new(r"^([a-zA-Z0-9._-]+)([<>=!]+)?(.*)$").ok()?;
     if let Some(caps) = re.captures(s) {
         let name = caps.get(1)?.as_str().to_string();
         let op = caps.get(2)?.as_str();
         let version = caps.get(3)?.as_str();
-
-        let predicate = match op {
-            ">=" => VersionPredicate::GreaterOrEqual(version.to_string()),
-            "<" => VersionPredicate::LessThan(version.to_string()),
-            "=" | "==" => VersionPredicate::Exact(version.to_string()),
-            "" => VersionPredicate::Any,
-            _ => return None,
-        };
-
-        Some((name, predicate))
+        if version.is_empty() {
+            Some((name, None))
+        } else {
+            Some((name, Some(format!("{}{}", op, version))))
+        }
     } else {
-        Some((s.to_string(), VersionPredicate::Any))
+        Some((s.to_string(), None))
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RepoPackage {
-    version: String,
-    arch: String,
-    flavour: String,
-    filename: String,
-    sha256: String,
-    depends: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RepoDatabase {
-    #[serde(flatten)]
-    packages: HashMap<String, RepoPackage>,
 }
 
 #[derive(Debug)]

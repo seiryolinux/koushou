@@ -1,0 +1,4 @@
+package "cmake-extra-modules" version="0.1" arch="x86_64" flavor="glibc-systemd" {
+  depends "glibc"
+  license "MIT"
+}

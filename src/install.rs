@@ -31,6 +31,7 @@ pub enum InstallError {
     Resolve(#[from] resolve::ResolveError),
 }
 
+/// Install a package by name (e.g. "htop") — resolves dependencies and downloads
 pub async fn install_package_by_name(name: &str, root: &Path) -> Result<(), InstallError> {
     if !root.is_dir() {
         return Err(InstallError::InvalidRoot(root.to_path_buf()));
@@ -131,22 +132,36 @@ pub fn install_local_package(kpkg_path: &Path, root: &Path) -> Result<(), Instal
         let file_name = entry.file_name();
         let dest_path = root.join(file_name);
 
-        if dest_path.exists() {
-            if dest_path.is_dir() {
-                std::fs::remove_dir_all(&dest_path)?;
-            } else {
+        if src_path.is_dir() {
+            if !dest_path.exists() {
+                std::fs::create_dir_all(&dest_path)?;
+            }
+            for sub_entry in std::fs::read_dir(&src_path)? {
+                let sub_entry = sub_entry?;
+                let sub_src = sub_entry.path();
+                let sub_dest = dest_path.join(sub_entry.file_name());
+                if sub_dest.exists() {
+                    if sub_dest.is_dir() {
+                        std::fs::remove_dir_all(&sub_dest)?;
+                    } else {
+                        std::fs::remove_file(&sub_dest)?;
+                    }
+                }
+                std::fs::rename(&sub_src, &sub_dest)?;
+            }
+        } else {
+            if dest_path.exists() {
                 std::fs::remove_file(&dest_path)?;
             }
+            std::fs::rename(&src_path, &dest_path)?;
         }
-
-        std::fs::rename(&src_path, &dest_path)?;
     }
 
     let installed_pkg = pkgdb::InstalledPackage {
         name: pkg.name.clone(),
         version: pkg.version.clone(),
         arch: pkg.arch.clone(),
-        flavor: pkg.flavor.clone(), 
+        flavour: pkg.flavour.clone(),
         depends: pkg.depends.clone(),
         files,
     };
