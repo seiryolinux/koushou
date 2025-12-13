@@ -1,4 +1,4 @@
-// src/pkgdb.rs
+/// src/pkgdb.rs
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ pub struct InstalledPackage {
     pub name: String,
     pub version: String,
     pub arch: String,
-    pub flavor: String,
+    pub flavour: String,
     pub depends: Vec<String>,
     pub files: Vec<String>,
 }
